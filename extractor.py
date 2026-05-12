@@ -2,7 +2,10 @@ import os
 import re
 import json
 import pdfplumber
+import easyocr
+import numpy as np
 
+from PIL import Image
 from dotenv import load_dotenv
 
 # =========================================================
@@ -37,12 +40,6 @@ try:
             "OpenAI Client Initialized"
         )
 
-    else:
-
-        print(
-            "OPENAI_API_KEY Missing"
-        )
-
 except Exception as e:
 
     print(
@@ -51,7 +48,14 @@ except Exception as e:
 
     print(str(e))
 
-    OPENAI_AVAILABLE = False
+# =========================================================
+# OCR INITIALIZATION
+# =========================================================
+
+reader = easyocr.Reader(
+    ['en'],
+    gpu=False
+)
 
 # =========================================================
 # PDF TEXT EXTRACTION
@@ -71,14 +75,14 @@ def extract_text_from_pdf(
 
             for page in pdf.pages:
 
-                extracted_text = (
+                extracted = (
                     page.extract_text()
                 )
 
-                if extracted_text:
+                if extracted:
 
                     text += (
-                        extracted_text
+                        extracted
                         + "\n"
                     )
 
@@ -90,12 +94,49 @@ def extract_text_from_pdf(
 
         print(str(e))
 
-        return ""
-
     return text
 
 # =========================================================
-# BASIC REGEX FALLBACK
+# IMAGE OCR EXTRACTION
+# =========================================================
+
+def extract_text_from_image(
+    image_path
+):
+
+    try:
+
+        image = Image.open(
+            image_path
+        )
+
+        image_np = np.array(
+            image
+        )
+
+        results = reader.readtext(
+            image_np,
+            detail=0
+        )
+
+        extracted_text = "\n".join(
+            results
+        )
+
+        return extracted_text
+
+    except Exception as e:
+
+        print(
+            "Image OCR Error:"
+        )
+
+        print(str(e))
+
+        return ""
+
+# =========================================================
+# BASIC FALLBACK EXTRACTION
 # =========================================================
 
 def basic_regex_extraction(
@@ -202,10 +243,6 @@ def ai_extract_invoice_data(
 
     try:
 
-        print(
-            "AI Extraction Started"
-        )
-
         response = (
             client.chat.completions.create(
 
@@ -222,7 +259,7 @@ def ai_extract_invoice_data(
 
                         Return ONLY valid JSON.
 
-                        JSON Format:
+                        JSON format:
 
                         {
                           "Vendor Name": "",
@@ -255,14 +292,8 @@ def ai_extract_invoice_data(
             .strip()
         )
 
-        print(
-            "RAW AI RESPONSE:"
-        )
-
-        print(content)
-
         # -------------------------------------------------
-        # CLEAN MARKDOWN JSON
+        # CLEAN JSON BLOCKS
         # -------------------------------------------------
 
         content = content.replace(
@@ -281,49 +312,38 @@ def ai_extract_invoice_data(
             content
         )
 
-        extracted_data = {
+        return {
 
             "Vendor Name":
-
             parsed.get(
                 "Vendor Name",
                 ""
             ),
 
             "Invoice Number":
-
             parsed.get(
                 "Invoice Number",
                 ""
             ),
 
             "Invoice Date":
-
             parsed.get(
                 "Invoice Date",
                 ""
             ),
 
             "Total Amount":
-
             parsed.get(
                 "Total Amount",
                 ""
             ),
 
             "Currency":
-
             parsed.get(
                 "Currency",
                 "INR"
             )
         }
-
-        print(
-            "AI EXTRACTION SUCCESS"
-        )
-
-        return extracted_data
 
     except Exception as e:
 
@@ -344,17 +364,62 @@ def extract_invoice_data(
 ):
 
     print(
-        "Starting Invoice Extraction"
+        "Starting Extraction"
     )
 
-    text = extract_text_from_pdf(
+    extension = (
         file_path
+        .split(".")[-1]
+        .lower()
     )
 
-    if not text:
+    extracted_text = ""
+
+    # =====================================================
+    # PDF EXTRACTION
+    # =====================================================
+
+    if extension == "pdf":
+
+        extracted_text = (
+            extract_text_from_pdf(
+                file_path
+            )
+        )
+
+        # OCR fallback for scanned PDFs
+
+        if not extracted_text.strip():
+
+            print(
+                "PDF text empty"
+            )
+
+    # =====================================================
+    # IMAGE OCR
+    # =====================================================
+
+    elif extension in [
+
+        "png",
+        "jpg",
+        "jpeg"
+    ]:
+
+        extracted_text = (
+            extract_text_from_image(
+                file_path
+            )
+        )
+
+    # =====================================================
+    # VALIDATION
+    # =====================================================
+
+    if not extracted_text:
 
         print(
-            "No PDF Text Extracted"
+            "No text extracted"
         )
 
         return {
@@ -371,21 +436,21 @@ def extract_invoice_data(
         }
 
     print(
-        "PDF Text Extraction Success"
+        "TEXT EXTRACTION SUCCESS"
     )
 
     # =====================================================
-    # TRY AI EXTRACTION
+    # AI EXTRACTION
     # =====================================================
 
     ai_result = ai_extract_invoice_data(
-        text
+        extracted_text
     )
 
     if ai_result:
 
         print(
-            "Using AI Extracted Data"
+            "AI EXTRACTION SUCCESS"
         )
 
         return ai_result
@@ -399,5 +464,5 @@ def extract_invoice_data(
     )
 
     return basic_regex_extraction(
-        text
+        extracted_text
     )
