@@ -1,18 +1,18 @@
 import os
-import json
 import re
+import json
 import pdfplumber
 
 from dotenv import load_dotenv
 
 # =========================================================
-# LOAD ENV
+# LOAD ENVIRONMENT
 # =========================================================
 
 load_dotenv()
 
 # =========================================================
-# OPENAI SETUP
+# OPENAI INITIALIZATION
 # =========================================================
 
 OPENAI_AVAILABLE = False
@@ -33,7 +33,23 @@ try:
 
         OPENAI_AVAILABLE = True
 
-except:
+        print(
+            "OpenAI Client Initialized"
+        )
+
+    else:
+
+        print(
+            "OPENAI_API_KEY Missing"
+        )
+
+except Exception as e:
+
+    print(
+        "OpenAI Initialization Error:"
+    )
+
+    print(str(e))
 
     OPENAI_AVAILABLE = False
 
@@ -55,20 +71,31 @@ def extract_text_from_pdf(
 
             for page in pdf.pages:
 
-                page_text = page.extract_text()
+                extracted_text = (
+                    page.extract_text()
+                )
 
-                if page_text:
+                if extracted_text:
 
-                    text += page_text + "\n"
+                    text += (
+                        extracted_text
+                        + "\n"
+                    )
 
-    except:
+    except Exception as e:
+
+        print(
+            "PDF Extraction Error:"
+        )
+
+        print(str(e))
 
         return ""
 
     return text
 
 # =========================================================
-# REGEX FALLBACK
+# BASIC REGEX FALLBACK
 # =========================================================
 
 def basic_regex_extraction(
@@ -88,11 +115,25 @@ def basic_regex_extraction(
         "Currency": "INR"
     }
 
-    # ---------------- INVOICE NUMBER ----------------
+    # -----------------------------------------------------
+    # VENDOR
+    # -----------------------------------------------------
+
+    lines = text.split("\n")
+
+    if lines:
+
+        invoice_data[
+            "Vendor Name"
+        ] = lines[0][:50]
+
+    # -----------------------------------------------------
+    # INVOICE NUMBER
+    # -----------------------------------------------------
 
     invoice_match = re.search(
 
-        r"Invoice[\s#:]*([A-Za-z0-9\-]+)",
+        r"Invoice[\s#:]*([A-Za-z0-9\-\/]+)",
 
         text,
 
@@ -105,7 +146,9 @@ def basic_regex_extraction(
             "Invoice Number"
         ] = invoice_match.group(1)
 
-    # ---------------- DATE ----------------
+    # -----------------------------------------------------
+    # DATE
+    # -----------------------------------------------------
 
     date_match = re.search(
 
@@ -120,7 +163,9 @@ def basic_regex_extraction(
             "Invoice Date"
         ] = date_match.group(1)
 
-    # ---------------- AMOUNT ----------------
+    # -----------------------------------------------------
+    # AMOUNT
+    # -----------------------------------------------------
 
     amount_match = re.search(
 
@@ -137,16 +182,6 @@ def basic_regex_extraction(
             "Total Amount"
         ] = amount_match.group(1)
 
-    # ---------------- VENDOR ----------------
-
-    lines = text.split("\n")
-
-    if lines:
-
-        invoice_data[
-            "Vendor Name"
-        ] = lines[0][:50]
-
     return invoice_data
 
 # =========================================================
@@ -159,133 +194,168 @@ def ai_extract_invoice_data(
 
     if not OPENAI_AVAILABLE:
 
-        print("OPENAI NOT AVAILABLE")
+        print(
+            "OpenAI Not Available"
+        )
 
         return None
 
     try:
 
-        print("OPENAI AI EXTRACTION STARTED")
+        print(
+            "AI Extraction Started"
+        )
 
-        response = client.chat.completions.create(
+        response = (
+            client.chat.completions.create(
 
-            model="gpt-3.5-turbo",
+                model="gpt-3.5-turbo",
 
-            messages=[
-
-                {
-                    "role": "system",
-
-                    "content":
-                    """
-                    Extract invoice details and return ONLY valid JSON.
-
-                    Required JSON format:
+                messages=[
 
                     {
-                      "Vendor Name": "",
-                      "Invoice Number": "",
-                      "Invoice Date": "",
-                      "Total Amount": "",
-                      "Currency": ""
+                        "role": "system",
+
+                        "content":
+                        """
+                        Extract invoice details.
+
+                        Return ONLY valid JSON.
+
+                        JSON Format:
+
+                        {
+                          "Vendor Name": "",
+                          "Invoice Number": "",
+                          "Invoice Date": "",
+                          "Total Amount": "",
+                          "Currency": ""
+                        }
+                        """
+                    },
+
+                    {
+                        "role": "user",
+
+                        "content":
+                        text[:6000]
                     }
-                    """
-                },
+                ],
 
-                {
-                    "role": "user",
-
-                    "content": text[:6000]
-                }
-            ],
-
-            temperature=0
+                temperature=0
+            )
         )
 
         content = (
+
             response
             .choices[0]
             .message
             .content
+            .strip()
+        )
+
+        print(
+            "RAW AI RESPONSE:"
         )
 
         print(content)
 
-        return json.loads(content)
+        # -------------------------------------------------
+        # CLEAN MARKDOWN JSON
+        # -------------------------------------------------
+
+        content = content.replace(
+            "```json",
+            ""
+        )
+
+        content = content.replace(
+            "```",
+            ""
+        )
+
+        content = content.strip()
+
+        parsed = json.loads(
+            content
+        )
+
+        extracted_data = {
+
+            "Vendor Name":
+
+            parsed.get(
+                "Vendor Name",
+                ""
+            ),
+
+            "Invoice Number":
+
+            parsed.get(
+                "Invoice Number",
+                ""
+            ),
+
+            "Invoice Date":
+
+            parsed.get(
+                "Invoice Date",
+                ""
+            ),
+
+            "Total Amount":
+
+            parsed.get(
+                "Total Amount",
+                ""
+            ),
+
+            "Currency":
+
+            parsed.get(
+                "Currency",
+                "INR"
+            )
+        }
+
+        print(
+            "AI EXTRACTION SUCCESS"
+        )
+
+        return extracted_data
 
     except Exception as e:
 
-        print("OPENAI ERROR:", str(e))
-
-        return None
-
-    if not OPENAI_AVAILABLE:
-
-        return None
-
-    try:
-
-        response = client.chat.completions.create(
-
-            model="gpt-3.5-turbo",
-
-            messages=[
-
-                {
-                    "role": "system",
-
-                    "content":
-                    """
-                    Extract invoice details and return ONLY valid JSON.
-
-                    Required JSON format:
-
-                    {
-                      "Vendor Name": "",
-                      "Invoice Number": "",
-                      "Invoice Date": "",
-                      "Total Amount": "",
-                      "Currency": ""
-                    }
-                    """
-                },
-
-                {
-                    "role": "user",
-
-                    "content": text[:6000]
-                }
-            ],
-
-            temperature=0
+        print(
+            "AI Extraction Error:"
         )
 
-        content = (
-            response
-            .choices[0]
-            .message
-            .content
-        )
-
-        return json.loads(content)
-
-    except:
+        print(str(e))
 
         return None
 
 # =========================================================
-# MAIN EXTRACTION
+# MAIN EXTRACTION PIPELINE
 # =========================================================
 
 def extract_invoice_data(
     file_path
 ):
 
+    print(
+        "Starting Invoice Extraction"
+    )
+
     text = extract_text_from_pdf(
         file_path
     )
 
     if not text:
+
+        print(
+            "No PDF Text Extracted"
+        )
 
         return {
 
@@ -300,21 +370,33 @@ def extract_invoice_data(
             "Currency": "INR"
         }
 
+    print(
+        "PDF Text Extraction Success"
+    )
+
     # =====================================================
     # TRY AI EXTRACTION
     # =====================================================
 
-    ai_data = ai_extract_invoice_data(
+    ai_result = ai_extract_invoice_data(
         text
     )
 
-    if ai_data:
+    if ai_result:
 
-        return ai_data
+        print(
+            "Using AI Extracted Data"
+        )
+
+        return ai_result
 
     # =====================================================
-    # FALLBACK EXTRACTION
+    # FALLBACK REGEX
     # =====================================================
+
+    print(
+        "Using Regex Fallback"
+    )
 
     return basic_regex_extraction(
         text
