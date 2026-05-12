@@ -1,41 +1,57 @@
-import pdfplumber
-from openai import OpenAI
-from dotenv import load_dotenv
-from PIL import Image
-import base64
-import json
 import os
+import re
+import pdfplumber
+import pandas as pd
 
-# Load environment variables
+from dotenv import load_dotenv
+
+# =========================================================
+# LOAD ENV
+# =========================================================
+
 load_dotenv()
 
-# OpenAI Client
-client = OpenAI(
-    api_key=os.getenv("OPENAI_API_KEY")
-)
+# =========================================================
+# OPTIONAL OPENAI CLIENT
+# =========================================================
 
-# Function to convert image to base64
-def encode_image(image_path):
+OPENAI_AVAILABLE = False
 
-    with open(image_path, "rb") as image_file:
+try:
 
-        return base64.b64encode(
-            image_file.read()
-        ).decode("utf-8")
+    from openai import OpenAI
 
-# Main Extraction Function
-def extract_invoice_data(file_path):
+    api_key = os.getenv(
+        "OPENAI_API_KEY"
+    )
 
-    file_extension = os.path.splitext(
-        file_path
-    )[1].lower()
+    if api_key:
+
+        client = OpenAI(
+            api_key=api_key
+        )
+
+        OPENAI_AVAILABLE = True
+
+except:
+
+    OPENAI_AVAILABLE = False
+
+# =========================================================
+# EXTRACT TEXT FROM PDF
+# =========================================================
+
+def extract_text_from_pdf(
+    pdf_path
+):
 
     text = ""
 
-    # PDF Processing
-    if file_extension == ".pdf":
+    try:
 
-        with pdfplumber.open(file_path) as pdf:
+        with pdfplumber.open(
+            pdf_path
+        ) as pdf:
 
             for page in pdf.pages:
 
@@ -43,84 +59,181 @@ def extract_invoice_data(file_path):
 
                 if extracted:
 
-                    text += extracted
+                    text += extracted + "\n"
 
-        prompt = f"""
-        Extract these invoice details:
+    except:
 
-        - Vendor Name
-        - Invoice Number
-        - Invoice Date
-        - Total Amount
-        - Currency
+        return ""
 
-        Return ONLY valid JSON.
+    return text
 
-        Invoice Text:
-        {text}
-        """
+# =========================================================
+# BASIC FIELD EXTRACTION
+# =========================================================
+
+def extract_basic_fields(
+    text
+):
+
+    invoice_data = {
+
+        "Vendor Name": "",
+
+        "Invoice Number": "",
+
+        "Invoice Date": "",
+
+        "Total Amount": "",
+
+        "Currency": "INR"
+    }
+
+    # ---------------- INVOICE NUMBER ----------------
+
+    invoice_match = re.search(
+
+        r"Invoice[\s#:]*([A-Za-z0-9\-]+)",
+
+        text,
+
+        re.IGNORECASE
+    )
+
+    if invoice_match:
+
+        invoice_data[
+            "Invoice Number"
+        ] = invoice_match.group(1)
+
+    # ---------------- DATE ----------------
+
+    date_match = re.search(
+
+        r"(\d{2}[/-]\d{2}[/-]\d{4})",
+
+        text
+    )
+
+    if date_match:
+
+        invoice_data[
+            "Invoice Date"
+        ] = date_match.group(1)
+
+    # ---------------- AMOUNT ----------------
+
+    amount_match = re.search(
+
+        r"(?:Total|Amount)[^\d]*([\d,]+\.\d{2})",
+
+        text,
+
+        re.IGNORECASE
+    )
+
+    if amount_match:
+
+        invoice_data[
+            "Total Amount"
+        ] = amount_match.group(1)
+
+    # ---------------- VENDOR ----------------
+
+    lines = text.split("\n")
+
+    if lines:
+
+        invoice_data[
+            "Vendor Name"
+        ] = lines[0][:50]
+
+    return invoice_data
+
+# =========================================================
+# AI ENHANCEMENT (OPTIONAL)
+# =========================================================
+
+def ai_extract_invoice_data(
+    text
+):
+
+    if not OPENAI_AVAILABLE:
+
+        return None
+
+    try:
 
         response = client.chat.completions.create(
-            model="gpt-4.1-mini",
+
+            model="gpt-3.5-turbo",
+
             messages=[
+
+                {
+                    "role": "system",
+
+                    "content":
+                    "Extract invoice details."
+                },
+
                 {
                     "role": "user",
-                    "content": prompt
+
+                    "content": text[:4000]
                 }
             ]
         )
 
-    # Image Processing
-    else:
+        return response.choices[0].message.content
 
-        base64_image = encode_image(file_path)
+    except:
 
-        response = client.chat.completions.create(
-            model="gpt-4o",
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": """
-                            Extract these invoice details:
+        return None
 
-                            - Vendor Name
-                            - Invoice Number
-                            - Invoice Date
-                            - Total Amount
-                            - Currency
+# =========================================================
+# MAIN EXTRACTION FUNCTION
+# =========================================================
 
-                            Return ONLY valid JSON.
-                            """
-                        },
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/jpeg;base64,{base64_image}"
-                            }
-                        }
-                    ]
-                }
-            ]
-        )
+def extract_invoice_data(
+    file_path
+):
 
-    # Clean Response
-    result = response.choices[0].message.content
-
-    result = result.replace(
-        "```json",
-        ""
+    text = extract_text_from_pdf(
+        file_path
     )
 
-    result = result.replace(
-        "```",
-        ""
+    if not text:
+
+        return {
+
+            "Vendor Name": "",
+
+            "Invoice Number": "",
+
+            "Invoice Date": "",
+
+            "Total Amount": "",
+
+            "Currency": "INR"
+        }
+
+    # =====================================================
+    # BASIC EXTRACTION
+    # =====================================================
+
+    invoice_data = extract_basic_fields(
+        text
     )
 
-    result = result.strip()
+    # =====================================================
+    # OPTIONAL AI ENHANCEMENT
+    # =====================================================
 
-    parsed_json = json.loads(result)
+    ai_result = ai_extract_invoice_data(
+        text
+    )
 
-    return parsed_json
+    # Currently optional
+    # Future enhancement point
+
+    return invoice_data
