@@ -1,7 +1,7 @@
 import os
+import json
 import re
 import pdfplumber
-import pandas as pd
 
 from dotenv import load_dotenv
 
@@ -12,7 +12,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # =========================================================
-# OPTIONAL OPENAI CLIENT
+# OPENAI SETUP
 # =========================================================
 
 OPENAI_AVAILABLE = False
@@ -38,7 +38,7 @@ except:
     OPENAI_AVAILABLE = False
 
 # =========================================================
-# EXTRACT TEXT FROM PDF
+# PDF TEXT EXTRACTION
 # =========================================================
 
 def extract_text_from_pdf(
@@ -55,11 +55,11 @@ def extract_text_from_pdf(
 
             for page in pdf.pages:
 
-                extracted = page.extract_text()
+                page_text = page.extract_text()
 
-                if extracted:
+                if page_text:
 
-                    text += extracted + "\n"
+                    text += page_text + "\n"
 
     except:
 
@@ -68,10 +68,10 @@ def extract_text_from_pdf(
     return text
 
 # =========================================================
-# BASIC FIELD EXTRACTION
+# REGEX FALLBACK
 # =========================================================
 
-def extract_basic_fields(
+def basic_regex_extraction(
     text
 ):
 
@@ -124,7 +124,7 @@ def extract_basic_fields(
 
     amount_match = re.search(
 
-        r"(?:Total|Amount)[^\d]*([\d,]+\.\d{2})",
+        r"(?:Total|Amount|Payable)[^\d]*([\d,]+\.\d{2})",
 
         text,
 
@@ -150,7 +150,7 @@ def extract_basic_fields(
     return invoice_data
 
 # =========================================================
-# AI ENHANCEMENT (OPTIONAL)
+# AI EXTRACTION
 # =========================================================
 
 def ai_extract_invoice_data(
@@ -173,25 +173,46 @@ def ai_extract_invoice_data(
                     "role": "system",
 
                     "content":
-                    "Extract invoice details."
+                    """
+                    Extract invoice details and return ONLY valid JSON.
+
+                    Required JSON format:
+
+                    {
+                      "Vendor Name": "",
+                      "Invoice Number": "",
+                      "Invoice Date": "",
+                      "Total Amount": "",
+                      "Currency": ""
+                    }
+                    """
                 },
 
                 {
                     "role": "user",
 
-                    "content": text[:4000]
+                    "content": text[:6000]
                 }
-            ]
+            ],
+
+            temperature=0
         )
 
-        return response.choices[0].message.content
+        content = (
+            response
+            .choices[0]
+            .message
+            .content
+        )
+
+        return json.loads(content)
 
     except:
 
         return None
 
 # =========================================================
-# MAIN EXTRACTION FUNCTION
+# MAIN EXTRACTION
 # =========================================================
 
 def extract_invoice_data(
@@ -218,22 +239,21 @@ def extract_invoice_data(
         }
 
     # =====================================================
-    # BASIC EXTRACTION
+    # TRY AI EXTRACTION
     # =====================================================
 
-    invoice_data = extract_basic_fields(
+    ai_data = ai_extract_invoice_data(
         text
     )
 
+    if ai_data:
+
+        return ai_data
+
     # =====================================================
-    # OPTIONAL AI ENHANCEMENT
+    # FALLBACK EXTRACTION
     # =====================================================
 
-    ai_result = ai_extract_invoice_data(
+    return basic_regex_extraction(
         text
     )
-
-    # Currently optional
-    # Future enhancement point
-
-    return invoice_data
