@@ -159,6 +159,68 @@ def ai_extract_invoice_data(
 
     if not OPENAI_AVAILABLE:
 
+        print("OPENAI NOT AVAILABLE")
+
+        return None
+
+    try:
+
+        print("OPENAI AI EXTRACTION STARTED")
+
+        response = client.chat.completions.create(
+
+            model="gpt-3.5-turbo",
+
+            messages=[
+
+                {
+                    "role": "system",
+
+                    "content":
+                    """
+                    Extract invoice details and return ONLY valid JSON.
+
+                    Required JSON format:
+
+                    {
+                      "Vendor Name": "",
+                      "Invoice Number": "",
+                      "Invoice Date": "",
+                      "Total Amount": "",
+                      "Currency": ""
+                    }
+                    """
+                },
+
+                {
+                    "role": "user",
+
+                    "content": text[:6000]
+                }
+            ],
+
+            temperature=0
+        )
+
+        content = (
+            response
+            .choices[0]
+            .message
+            .content
+        )
+
+        print(content)
+
+        return json.loads(content)
+
+    except Exception as e:
+
+        print("OPENAI ERROR:", str(e))
+
+        return None
+
+    if not OPENAI_AVAILABLE:
+
         return None
 
     try:
