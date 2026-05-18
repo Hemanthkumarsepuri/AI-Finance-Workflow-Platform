@@ -2,81 +2,133 @@ import streamlit as st
 
 from datetime import datetime
 
-# ---------------- UI ----------------
+# =========================================================
+# UI
+# =========================================================
 
 from modules.ui import (
+
     setup_ui,
+
     render_header
 )
 
-# ---------------- AUTH ----------------
+# =========================================================
+# AUTH
+# =========================================================
 
 from modules.auth import (
+
     initialize_session,
+
     login_screen,
-    sidebar_logout
+
+    sidebar_logout,
+
+    seed_demo_users
 )
 
-# ---------------- DASHBOARD ----------------
+# =========================================================
+# DASHBOARD
+# =========================================================
 
 from modules.dashboard import (
     render_dashboard
 )
 
-# ---------------- UPLOAD ----------------
+# =========================================================
+# UPLOAD
+# =========================================================
 
 from modules.upload import (
     render_upload_page
 )
 
-# ---------------- APPROVALS ----------------
+# =========================================================
+# APPROVALS
+# =========================================================
 
 from modules.approvals import (
     render_approval_queue
 )
 
-# ---------------- ANALYTICS ----------------
+# =========================================================
+# ANALYTICS
+# =========================================================
 
 from modules.analytics import (
     render_analytics
 )
 
-# ---------------- SLA ----------------
+# =========================================================
+# SLA
+# =========================================================
 
 from modules.sla import (
     render_sla
 )
 
-# ---------------- VENDOR ----------------
+# =========================================================
+# VENDOR INTELLIGENCE
+# =========================================================
 
 from modules.vendor_intelligence import (
     render_vendor_intelligence
 )
 
-# ---------------- ANOMALY ----------------
+# =========================================================
+# ANOMALY DETECTION
+# =========================================================
 
 from modules.anomaly_detection import (
     render_anomaly_detection
 )
 
-# ---------------- REPORTS ----------------
+# =========================================================
+# REPORTS
+# =========================================================
 
 from modules.reports import (
     render_reports
 )
 
-# ---------------- AUDIT ----------------
+# =========================================================
+# AUDIT
+# =========================================================
 
 from modules.audit import (
     render_audit_trail
 )
 
-# ---------------- DATABASE ----------------
+# =========================================================
+# DATABASE
+# =========================================================
 
 from database import (
+
     Session,
+
     Invoice,
-    AuditLog
+
+    AuditLog,
+
+    User,
+
+    ApprovalHistory
+)
+
+# =========================================================
+# PAGE CONFIG
+# =========================================================
+
+st.set_page_config(
+
+    page_title=
+    "AI Finance Workflow Platform",
+
+    page_icon="💰",
+
+    layout="wide"
 )
 
 # =========================================================
@@ -88,10 +140,27 @@ setup_ui()
 render_header()
 
 # =========================================================
-# SESSION
+# SESSION INITIALIZATION
 # =========================================================
 
 initialize_session()
+
+# =========================================================
+# DATABASE SESSION
+# =========================================================
+
+session = Session()
+
+# =========================================================
+# DEMO USER SEEDING
+# =========================================================
+
+seed_demo_users(
+
+    session,
+
+    User
+)
 
 # =========================================================
 # LOGIN
@@ -99,45 +168,14 @@ initialize_session()
 
 if not st.session_state.logged_in:
 
-    login_screen()
+    login_screen(
+
+        session,
+
+        User
+    )
 
     st.stop()
-
-# =========================================================
-# ROLE PAGES
-# =========================================================
-
-ROLE_PAGES = {
-
-    "Employee": [
-        "Dashboard",
-        "Upload Invoice",
-        "Reports"
-    ],
-
-    "Manager": [
-        "Dashboard",
-        "Upload Invoice",
-        "Approval Queue",
-        "Analytics",
-        "Reports",
-        "SLA Monitoring",
-        "Vendor Intelligence",
-        "AI Anomaly Detection"
-    ],
-
-    "Finance Admin": [
-        "Dashboard",
-        "Upload Invoice",
-        "Approval Queue",
-        "Analytics",
-        "Reports",
-        "Audit Trail",
-        "SLA Monitoring",
-        "Vendor Intelligence",
-        "AI Anomaly Detection"
-    ]
-}
 
 # =========================================================
 # SIDEBAR
@@ -145,26 +183,149 @@ ROLE_PAGES = {
 
 sidebar_logout()
 
-page = st.sidebar.radio(
-    "Navigation",
-    ROLE_PAGES[st.session_state.role]
+# =========================================================
+# ENTERPRISE SIDEBAR INFO
+# =========================================================
+
+st.sidebar.markdown("---")
+
+st.sidebar.caption(
+
+    f"""
+Employee ID:
+{st.session_state.employee_id}
+    """
+)
+
+st.sidebar.caption(
+
+    f"""
+Department:
+{st.session_state.department}
+    """
+)
+
+st.sidebar.caption(
+
+    f"""
+Project:
+{st.session_state.project_name}
+    """
 )
 
 # =========================================================
-# DATABASE
+# ROLE-BASED PAGES
 # =========================================================
 
-session = Session()
+ROLE_PAGES = {
+
+    "employee": [
+
+        "Dashboard",
+
+        "Upload Invoice",
+
+        "Reports"
+    ],
+
+    "Manager": [
+
+        "Dashboard",
+
+        "Upload Invoice",
+
+        "Approval Queue",
+
+        "Analytics",
+
+        "Reports",
+
+        "SLA Monitoring",
+
+        "Vendor Intelligence",
+
+        "AI Anomaly Detection"
+    ],
+
+    "Delivery Manager": [
+
+        "Dashboard",
+
+        "Approval Queue",
+
+        "Analytics",
+
+        "Reports",
+
+        "SLA Monitoring",
+
+        "Vendor Intelligence",
+
+        "AI Anomaly Detection"
+    ],
+
+    "Finance Admin": [
+
+        "Dashboard",
+
+        "Upload Invoice",
+
+        "Approval Queue",
+
+        "Analytics",
+
+        "Reports",
+
+        "Audit Trail",
+
+        "SLA Monitoring",
+
+        "Vendor Intelligence",
+
+        "AI Anomaly Detection"
+    ]
+}
+
+# =========================================================
+# PAGE NAVIGATION
+# =========================================================
+
+user_role = (
+    st.session_state.role
+)
+
+allowed_pages = ROLE_PAGES.get(
+
+    user_role,
+
+    ["Dashboard"]
+)
+
+page = st.sidebar.radio(
+
+    "Navigation",
+
+    allowed_pages
+)
+
+# =========================================================
+# FETCH INVOICES
+# =========================================================
 
 all_invoices = session.query(
     Invoice
 ).all()
 
 # =========================================================
-# AUDIT FUNCTION
+# ENTERPRISE AUDIT LOGGER
 # =========================================================
 
-def add_audit_log(invoice_number, action):
+def add_audit_log(
+
+    invoice_number,
+
+    action
+):
 
     log = AuditLog(
 
@@ -172,13 +333,28 @@ def add_audit_log(invoice_number, action):
             "%Y-%m-%d %H:%M:%S"
         ),
 
-        username=st.session_state.username,
+        username=(
+            st.session_state.employee_name
+        ),
 
-        role=st.session_state.role,
+        role=(
+            st.session_state.role
+        ),
 
         invoice_number=invoice_number,
 
-        action=action
+        action=action,
+
+        details=f"""
+Action performed by:
+{st.session_state.employee_name}
+
+Role:
+{st.session_state.role}
+
+Project:
+{st.session_state.project_name}
+        """
     )
 
     session.add(log)
@@ -189,48 +365,149 @@ def add_audit_log(invoice_number, action):
 # KPI CALCULATIONS
 # =========================================================
 
-total_invoices = len(all_invoices)
+total_invoices = len(
+    all_invoices
+)
 
 pending_approvals = len([
+
     inv for inv in all_invoices
+
     if inv.approval_status in [
+
         "Manager Approval",
-        "Finance Review"
+
+        "Finance Review",
+
+        "Forwarded"
     ]
 ])
 
 approved_invoices = len([
+
     inv for inv in all_invoices
-    if inv.approval_status == "Approved"
+
+    if inv.approval_status
+    == "Approved"
 ])
 
 rejected_invoices = len([
+
     inv for inv in all_invoices
-    if inv.approval_status == "Rejected"
+
+    if inv.approval_status
+    == "Rejected"
+])
+
+high_risk_invoices = len([
+
+    inv for inv in all_invoices
+
+    if (
+
+        inv.duplicate_risk_score
+        and
+        inv.duplicate_risk_score >= 0.80
+    )
+])
+
+sla_breaches = len([
+
+    inv for inv in all_invoices
+
+    if inv.sla_status
+    == "Breached"
 ])
 
 # =========================================================
-# ROUTING
+# ENTERPRISE HEADER METRICS
 # =========================================================
 
-# ---------------- DASHBOARD ----------------
+st.markdown("---")
+
+metric_col1, metric_col2, metric_col3, metric_col4, metric_col5, metric_col6 = (
+
+    st.columns(6)
+)
+
+with metric_col1:
+
+    st.metric(
+
+        "Total Invoices",
+
+        total_invoices
+    )
+
+with metric_col2:
+
+    st.metric(
+
+        "Pending",
+
+        pending_approvals
+    )
+
+with metric_col3:
+
+    st.metric(
+
+        "Approved",
+
+        approved_invoices
+    )
+
+with metric_col4:
+
+    st.metric(
+
+        "Rejected",
+
+        rejected_invoices
+    )
+
+with metric_col5:
+
+    st.metric(
+
+        "High Risk",
+
+        high_risk_invoices
+    )
+
+with metric_col6:
+
+    st.metric(
+
+        "SLA Breaches",
+
+        sla_breaches
+    )
+
+st.markdown("---")
+
+# =========================================================
+# DASHBOARD
+# =========================================================
 
 if page == "Dashboard":
 
     render_dashboard(
 
-    all_invoices,
+        all_invoices,
 
-    total_invoices,
+        total_invoices,
 
-    pending_approvals,
+        pending_approvals,
 
-    approved_invoices,
+        approved_invoices,
 
-    rejected_invoices
-)
+        rejected_invoices
+    )
 
-# ---------------- UPLOAD ----------------
+# =========================================================
+# UPLOAD
+# =========================================================
 
 elif page == "Upload Invoice":
 
@@ -240,10 +517,16 @@ elif page == "Upload Invoice":
 
         Invoice,
 
+        User,
+
+        ApprovalHistory,
+
         add_audit_log
     )
 
-# ---------------- APPROVALS ----------------
+# =========================================================
+# APPROVAL QUEUE
+# =========================================================
 
 elif page == "Approval Queue":
 
@@ -255,10 +538,16 @@ elif page == "Approval Queue":
 
         AuditLog,
 
+        ApprovalHistory,
+
+        User,
+
         add_audit_log
     )
 
-# ---------------- ANALYTICS ----------------
+# =========================================================
+# ANALYTICS
+# =========================================================
 
 elif page == "Analytics":
 
@@ -266,16 +555,22 @@ elif page == "Analytics":
         all_invoices
     )
 
-# ---------------- SLA ----------------
+# =========================================================
+# SLA MONITORING
+# =========================================================
 
 elif page == "SLA Monitoring":
 
     render_sla(
+
         session,
+
         Invoice
     )
 
-# ---------------- VENDOR ----------------
+# =========================================================
+# VENDOR INTELLIGENCE
+# =========================================================
 
 elif page == "Vendor Intelligence":
 
@@ -283,7 +578,9 @@ elif page == "Vendor Intelligence":
         all_invoices
     )
 
-# ---------------- ANOMALY ----------------
+# =========================================================
+# AI ANOMALY DETECTION
+# =========================================================
 
 elif page == "AI Anomaly Detection":
 
@@ -291,7 +588,9 @@ elif page == "AI Anomaly Detection":
         all_invoices
     )
 
-# ---------------- REPORTS ----------------
+# =========================================================
+# REPORTS
+# =========================================================
 
 elif page == "Reports":
 
@@ -299,11 +598,29 @@ elif page == "Reports":
         all_invoices
     )
 
-# ---------------- AUDIT ----------------
+# =========================================================
+# AUDIT TRAIL
+# =========================================================
 
 elif page == "Audit Trail":
 
     render_audit_trail(
+
         session,
+
         AuditLog
     )
+
+# =========================================================
+# FOOTER
+# =========================================================
+
+st.markdown("---")
+
+st.caption(
+
+    """
+AI Finance Workflow Platform
+Enterprise Workflow Governance Engine
+    """
+)
