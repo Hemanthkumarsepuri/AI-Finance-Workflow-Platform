@@ -1,94 +1,135 @@
 import streamlit as st
 
-from config import (
-
-    ROLE_EMPLOYEE,
-
-    ROLE_MANAGER,
-
-    ROLE_FINANCE
-)
-
-# =========================================================
-# USERS
-# =========================================================
-
-USERS = {
-
-    "employee": {
-
-        "password": "emp123",
-
-        "role": ROLE_EMPLOYEE
-    },
-
-    "manager": {
-
-        "password": "mgr123",
-
-        "role": ROLE_MANAGER
-    },
-
-    "finance": {
-
-        "password": "fin123",
-
-        "role": ROLE_FINANCE
-    }
-}
-
 # =========================================================
 # SESSION INITIALIZATION
 # =========================================================
 
 def initialize_session():
 
-    if "logged_in" not in st.session_state:
+    default_values = {
 
-        st.session_state.logged_in = False
+        "logged_in": False,
 
-    if "username" not in st.session_state:
+        "user_id": None,
 
-        st.session_state.username = ""
+        "employee_id": "",
 
-    if "role" not in st.session_state:
+        "employee_name": "",
 
-        st.session_state.role = ""
+        "email": "",
 
-    if "uploader_key" not in st.session_state:
+        "role": "",
 
-        st.session_state.uploader_key = 0
+        "department": "",
+
+        "project_name": "",
+
+        "manager_employee_id": "",
+
+        "delivery_manager_employee_id": "",
+
+        "uploader_key": 0
+    }
+
+    for key, value in default_values.items():
+
+        if key not in st.session_state:
+
+            st.session_state[key] = value
 
 # =========================================================
 # LOGIN SCREEN
 # =========================================================
 
-def login_screen():
+def login_screen(
+
+    session,
+
+    User
+):
 
     st.subheader(
-        "Login"
+        "Enterprise Login"
     )
 
     username = st.text_input(
-        "Username"
+        "Employee ID / Username"
     )
 
     password = st.text_input(
+
         "Password",
+
         type="password"
     )
 
-    if st.button("Login"):
+    if st.button(
+        "Login"
+    ):
 
-        if username in USERS:
+        # =================================================
+        # USER VALIDATION
+        # =================================================
 
-            if USERS[username]["password"] == password:
+        user = session.query(
+            User
+        ).filter_by(
+            employee_id=username
+        ).first()
+
+        # =================================================
+        # DEMO PASSWORD STRATEGY
+        # =================================================
+        # Temporary:
+        # employee_id acts as password
+        #
+        # Future:
+        # LDAP / OAuth / SSO / Azure AD
+        # =================================================
+
+        if user:
+
+            if password == user.employee_id:
+
+                # =========================================
+                # SESSION ENRICHMENT
+                # =========================================
 
                 st.session_state.logged_in = True
 
-                st.session_state.username = username
+                st.session_state.user_id = user.id
 
-                st.session_state.role = USERS[username]["role"]
+                st.session_state.employee_id = (
+                    user.employee_id
+                )
+
+                st.session_state.employee_name = (
+                    user.employee_name
+                )
+
+                st.session_state.email = (
+                    user.email
+                )
+
+                st.session_state.role = (
+                    user.role
+                )
+
+                st.session_state.department = (
+                    user.department
+                )
+
+                st.session_state.project_name = (
+                    user.project_name
+                )
+
+                st.session_state.manager_employee_id = (
+                    user.manager_employee_id
+                )
+
+                st.session_state.delivery_manager_employee_id = (
+                    user.delivery_manager_employee_id
+                )
 
                 st.success(
                     "Login Successful"
@@ -105,7 +146,7 @@ def login_screen():
         else:
 
             st.error(
-                "Invalid Username"
+                "Invalid Employee ID"
             )
 
 # =========================================================
@@ -115,19 +156,169 @@ def login_screen():
 def sidebar_logout():
 
     st.sidebar.success(
-        f"Logged in as: {st.session_state.username}"
+        f"""
+Logged in as:
+{st.session_state.employee_name}
+        """
     )
 
     st.sidebar.info(
-        f"Role: {st.session_state.role}"
+        f"""
+Role:
+{st.session_state.role}
+        """
     )
 
-    if st.sidebar.button("Logout"):
+    st.sidebar.info(
+        f"""
+Project:
+{st.session_state.project_name}
+        """
+    )
 
-        st.session_state.logged_in = False
+    st.sidebar.info(
+        f"""
+Department:
+{st.session_state.department}
+        """
+    )
 
-        st.session_state.username = ""
+    # =====================================================
+    # HIERARCHY VISIBILITY
+    # =====================================================
 
-        st.session_state.role = ""
+    if st.session_state.manager_employee_id:
+
+        st.sidebar.caption(
+            f"""
+Manager:
+{st.session_state.manager_employee_id}
+            """
+        )
+
+    if st.session_state.delivery_manager_employee_id:
+
+        st.sidebar.caption(
+            f"""
+Delivery Manager:
+{st.session_state.delivery_manager_employee_id}
+            """
+        )
+
+    # =====================================================
+    # LOGOUT
+    # =====================================================
+
+    if st.sidebar.button(
+        "Logout"
+    ):
+
+        session_keys = list(
+            st.session_state.keys()
+        )
+
+        for key in session_keys:
+
+            del st.session_state[key]
 
         st.rerun()
+
+# =========================================================
+# USER SEEDING
+# =========================================================
+# Creates demo enterprise hierarchy users.
+#
+# Run once during app startup if users missing.
+# =========================================================
+
+def seed_demo_users(
+
+    session,
+
+    User
+):
+
+    existing_users = session.query(
+        User
+    ).count()
+
+    if existing_users > 0:
+
+        return
+
+    demo_users = [
+
+        User(
+
+            employee_id="EMP1001",
+
+            employee_name="Rahul Employee",
+
+            email="rahul@company.com",
+
+            role="employee",
+
+            department="Engineering",
+
+            project_name="Cloud Migration",
+
+            manager_employee_id="MGR2001",
+
+            delivery_manager_employee_id="DM3001"
+        ),
+
+        User(
+
+            employee_id="MGR2001",
+
+            employee_name="Priya Manager",
+
+            email="priya@company.com",
+
+            role="Manager",
+
+            department="Engineering",
+
+            project_name="Cloud Migration",
+
+            manager_employee_id="DM3001",
+
+            delivery_manager_employee_id="DM3001"
+        ),
+
+        User(
+
+            employee_id="DM3001",
+
+            employee_name="Arun Delivery Manager",
+
+            email="arun@company.com",
+
+            role="Delivery Manager",
+
+            department="Engineering",
+
+            project_name="Cloud Migration"
+        ),
+
+        User(
+
+            employee_id="FIN4001",
+
+            employee_name="Finance Admin",
+
+            email="finance@company.com",
+
+            role="Finance Admin",
+
+            department="Finance",
+
+            project_name="Finance Governance"
+        )
+    ]
+
+    session.add_all(
+        demo_users
+    )
+
+    session.commit()
