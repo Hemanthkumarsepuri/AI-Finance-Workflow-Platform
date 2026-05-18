@@ -1,5 +1,9 @@
 import os
+import uuid
 import streamlit as st
+import pandas as pd
+
+from datetime import datetime, timedelta
 
 from config import (
 
@@ -11,6 +15,8 @@ from config import (
 
     STATUS_MANAGER_APPROVAL,
 
+    STATUS_FINANCE_REVIEW,
+
     PROCESSED_FOLDER
 )
 
@@ -19,19 +25,210 @@ from extractor import (
 )
 
 from email_service import (
-    send_review_email
+
+    send_review_email,
+
+    send_ai_summary_email
 )
 
 from utils import (
+
     amount_to_float,
+
     clean_amount
 )
+
+# =========================================================
+# VENDOR NORMALIZATION
+# =========================================================
+
+def normalize_vendor_name(
+    vendor_name
+):
+
+    if not vendor_name:
+
+        return ""
+
+    vendor_name = vendor_name.lower()
+
+    remove_words = [
+
+        "services",
+        "service",
+        "limited",
+        "ltd",
+        "private",
+        "pvt",
+        "solutions",
+        "technologies",
+        "technology",
+        "telecom",
+        "communications",
+        "communication",
+        "india",
+        "infocomm",
+        "corporation"
+    ]
+
+    for word in remove_words:
+
+        vendor_name = vendor_name.replace(
+            word,
+            ""
+        )
+
+    vendor_name = (
+        vendor_name
+        .replace("-", " ")
+        .replace("_", " ")
+        .strip()
+    )
+
+    vendor_name = " ".join(
+        vendor_name.split()
+    )
+
+    return vendor_name
+
+# =========================================================
+# BILL CATEGORY ENGINE
+# =========================================================
+
+def detect_bill_category(
+    vendor_name,
+    extracted_text
+):
+
+    text = f"""
+{vendor_name}
+{extracted_text}
+""".lower()
+
+    category_mapping = {
+
+        "Travel": [
+
+            "uber",
+            "ola",
+            "flight",
+            "airlines",
+            "irctc",
+            "railway",
+            "travel",
+            "cab"
+        ],
+
+        "Food": [
+
+            "swiggy",
+            "zomato",
+            "restaurant",
+            "food",
+            "cafe",
+            "hotel"
+        ],
+
+        "Broadband": [
+
+            "jio",
+            "airtel",
+            "broadband",
+            "fiber",
+            "wifi",
+            "internet"
+        ],
+
+        "Accommodation": [
+
+            "oyo",
+            "marriott",
+            "hotel",
+            "stay"
+        ],
+
+        "Office Expense": [
+
+            "printer",
+            "stationery",
+            "office",
+            "supplies"
+        ]
+    }
+
+    for category, keywords in category_mapping.items():
+
+        for keyword in keywords:
+
+            if keyword in text:
+
+                return category
+
+    return "Miscellaneous"
+
+# =========================================================
+# AI RECOMMENDATION ENGINE
+# =========================================================
+
+def generate_ai_recommendation(
+
+    amount,
+    duplicate_risk,
+    category
+):
+
+    if duplicate_risk > 0.7:
+
+        return (
+
+            "Review",
+
+            """
+Possible duplicate invoice detected.
+Finance review recommended.
+            """
+        )
+
+    if amount > FINANCE_REVIEW_LIMIT:
+
+        return (
+
+            "Finance Review",
+
+            """
+High invoice amount detected.
+Finance governance review recommended.
+            """
+        )
+
+    if category == "Travel" and amount > 10000:
+
+        return (
+
+            "Review",
+
+            """
+High-value travel invoice detected.
+Manager review recommended.
+            """
+        )
+
+    return (
+
+        "Approve",
+
+        """
+Invoice pattern appears normal.
+Low anomaly risk detected.
+        """
+    )
 
 # =========================================================
 # VALIDATION
 # =========================================================
 
 def validate_invoice_data(
+
     vendor_name,
     invoice_number,
     invoice_date,
@@ -83,6 +280,217 @@ def validate_invoice_data(
     return errors
 
 # =========================================================
+# DUPLICATE DETECTION ENGINE
+# =========================================================
+
+def calculate_duplicate_risk(
+
+    session,
+    Invoice,
+    normalized_vendor_name,
+    invoice_number,
+    amount
+):
+
+    existing_invoices = session.query(
+        Invoice
+    ).all()
+
+    for inv in existing_invoices:
+
+        existing_vendor = normalize_vendor_name(
+            inv.vendor_name
+        )
+
+        existing_invoice_number = (
+            inv.invoice_number or ""
+        ).strip().lower()
+
+        current_invoice_number = (
+            invoice_number or ""
+        ).strip().lower()
+
+        try:
+
+            existing_amount = float(
+                inv.total_amount
+            )
+
+        except:
+
+            existing_amount = 0
+
+        if (
+
+            existing_vendor
+            == normalized_vendor_name
+
+            and
+
+            existing_invoice_number
+            == current_invoice_number
+        ):
+
+            return 0.95
+
+        if (
+
+            existing_vendor
+            == normalized_vendor_name
+
+            and
+
+            abs(existing_amount - amount)
+            < 5
+        ):
+
+            return 0.75
+
+    return 0.10
+
+# =========================================================
+# SLA INITIALIZATION
+# =========================================================
+
+def initialize_sla_status():
+
+    return (
+
+        "On Time",
+
+        str(
+            datetime.now()
+            + timedelta(days=2)
+        )
+    )
+
+# =========================================================
+# APPROVER ROUTING ENGINE
+# =========================================================
+
+def determine_workflow_and_approver(
+
+    session,
+    User,
+    employee_id,
+    amount,
+    bill_category
+):
+
+    employee = session.query(
+        User
+    ).filter_by(
+        employee_id=employee_id
+    ).first()
+
+    if not employee:
+
+        return (
+
+            STATUS_MANAGER_APPROVAL,
+
+            "Manager Review",
+
+            "Finance Admin"
+        )
+
+    manager_id = (
+        employee.manager_employee_id
+    )
+
+    delivery_manager_id = (
+        employee.delivery_manager_employee_id
+    )
+
+    manager = session.query(
+        User
+    ).filter_by(
+        employee_id=manager_id
+    ).first()
+
+    delivery_manager = session.query(
+        User
+    ).filter_by(
+        employee_id=delivery_manager_id
+    ).first()
+
+    # =====================================================
+    # CATEGORY BASED GOVERNANCE
+    # =====================================================
+
+    if bill_category == "Broadband":
+
+        workflow_stage = (
+            "Manager Review"
+        )
+
+        approval_status = (
+            STATUS_MANAGER_APPROVAL
+        )
+
+        approver = (
+
+            manager.employee_name
+            if manager
+            else "Finance Admin"
+        )
+
+    elif amount > FINANCE_REVIEW_LIMIT:
+
+        workflow_stage = (
+            "Delivery Manager Review"
+        )
+
+        approval_status = (
+            STATUS_FINANCE_REVIEW
+        )
+
+        approver = (
+
+            delivery_manager.employee_name
+            if delivery_manager
+            else "Finance Admin"
+        )
+
+    elif amount > AUTO_APPROVAL_LIMIT:
+
+        workflow_stage = (
+            "Manager Review"
+        )
+
+        approval_status = (
+            STATUS_MANAGER_APPROVAL
+        )
+
+        approver = (
+
+            manager.employee_name
+            if manager
+            else "Finance Admin"
+        )
+
+    else:
+
+        workflow_stage = (
+            "Auto Approved"
+        )
+
+        approval_status = (
+            STATUS_APPROVED
+        )
+
+        approver = "System"
+
+    return (
+
+        approval_status,
+
+        workflow_stage,
+
+        approver
+    )
+
+# =========================================================
 # MAIN PAGE
 # =========================================================
 
@@ -92,12 +500,56 @@ def render_upload_page(
 
     Invoice,
 
+    User,
+
+    ApprovalHistory,
+
     add_audit_log
 ):
 
     st.subheader(
-        "Upload Invoice"
+        "Enterprise Invoice Upload"
     )
+
+    # =====================================================
+    # EMPLOYEE SELECTION
+    # =====================================================
+
+    employees = session.query(
+        User
+    ).filter_by(
+        role="employee"
+    ).all()
+
+    employee_options = {
+
+        f"{emp.employee_name} ({emp.employee_id})":
+
+        emp.employee_id
+
+        for emp in employees
+    }
+
+    selected_employee = st.selectbox(
+
+        "Select Employee",
+
+        list(employee_options.keys())
+    )
+
+    employee_id = employee_options[
+        selected_employee
+    ]
+
+    employee = session.query(
+        User
+    ).filter_by(
+        employee_id=employee_id
+    ).first()
+
+    # =====================================================
+    # FILE UPLOAD
+    # =====================================================
 
     uploaded_file = st.file_uploader(
 
@@ -127,11 +579,15 @@ def render_upload_page(
                 PROCESSED_FOLDER
             )
 
+        unique_filename = f"""
+{uuid.uuid4()}_{uploaded_file.name}
+"""
+
         save_path = os.path.join(
 
             PROCESSED_FOLDER,
 
-            uploaded_file.name
+            unique_filename
         )
 
         with open(
@@ -150,6 +606,8 @@ def render_upload_page(
         result = extract_invoice_data(
             save_path
         )
+
+        extracted_text = str(result)
 
         # =================================================
         # FORM
@@ -206,6 +664,31 @@ def render_upload_page(
         )
 
         # =================================================
+        # NORMALIZATION
+        # =================================================
+
+        normalized_vendor_name = (
+            normalize_vendor_name(
+                vendor_name
+            )
+        )
+
+        # =================================================
+        # CATEGORY DETECTION
+        # =================================================
+
+        bill_category = detect_bill_category(
+
+            vendor_name,
+
+            extracted_text
+        )
+
+        st.info(
+            f"Detected Bill Category: {bill_category}"
+        )
+
+        # =================================================
         # VALIDATION
         # =================================================
 
@@ -238,10 +721,6 @@ def render_upload_page(
             "Save Invoice"
         ):
 
-            # --------------------------------------------
-            # BLOCK INVALID SAVE
-            # --------------------------------------------
-
             if validation_errors:
 
                 st.error(
@@ -258,103 +737,286 @@ def render_upload_page(
                 cleaned_amount
             )
 
-            # --------------------------------------------
-            # WORKFLOW
-            # --------------------------------------------
+            # =================================================
+            # DUPLICATE INTELLIGENCE
+            # =================================================
 
-            if amount_value <= AUTO_APPROVAL_LIMIT:
+            duplicate_risk_score = (
+                calculate_duplicate_risk(
 
-                approval_status = (
-                    STATUS_APPROVED
+                    session,
+
+                    Invoice,
+
+                    normalized_vendor_name,
+
+                    invoice_number,
+
+                    amount_value
+                )
+            )
+
+            if duplicate_risk_score >= 0.90:
+
+                st.error(
+                    """
+High duplicate probability detected.
+Invoice blocked for governance review.
+                    """
                 )
 
-            elif amount_value <= FINANCE_REVIEW_LIMIT:
+                st.stop()
 
-                approval_status = (
-                    STATUS_MANAGER_APPROVAL
+            # =================================================
+            # AI RECOMMENDATION
+            # =================================================
+
+            ai_recommendation, ai_reasoning = (
+
+                generate_ai_recommendation(
+
+                    amount_value,
+
+                    duplicate_risk_score,
+
+                    bill_category
                 )
+            )
 
-            else:
+            # =================================================
+            # WORKFLOW ROUTING
+            # =================================================
 
-                approval_status = (
-                    STATUS_MANAGER_APPROVAL
+            approval_status, workflow_stage, current_approver = (
+
+                determine_workflow_and_approver(
+
+                    session,
+
+                    User,
+
+                    employee_id,
+
+                    amount_value,
+
+                    bill_category
                 )
+            )
 
-            # --------------------------------------------
-            # DUPLICATE CHECK
-            # --------------------------------------------
+            # =================================================
+            # SLA INITIALIZATION
+            # =================================================
 
-            existing_invoice = (
+            sla_status, sla_due_date = (
+
+                initialize_sla_status()
+            )
+
+            # =================================================
+            # REUPLOAD DETECTION
+            # =================================================
+
+            previous_rejected_invoice = (
 
                 session.query(Invoice)
 
-                .filter_by(
+                .filter(
 
-                    invoice_number=invoice_number,
+                    Invoice.invoice_number
+                    == invoice_number,
 
-                    vendor_name=vendor_name
+                    Invoice.approval_status
+                    == "Rejected"
                 )
 
                 .first()
             )
 
-            if existing_invoice:
+            parent_invoice_id = None
+            version_number = 1
+            resubmitted_flag = False
 
-                st.warning(
-                    "Duplicate Invoice Detected"
+            if previous_rejected_invoice:
+
+                parent_invoice_id = (
+                    previous_rejected_invoice.id
                 )
 
-            else:
+                version_number = (
+                    previous_rejected_invoice.version_number
+                    + 1
+                )
 
-                invoice = Invoice(
+                resubmitted_flag = True
+
+            # =================================================
+            # CREATE INVOICE
+            # =================================================
+
+            invoice = Invoice(
+
+                employee_id=employee.employee_id,
+
+                employee_name=employee.employee_name,
+
+                project_name=employee.project_name,
+
+                vendor_name=vendor_name,
+
+                normalized_vendor_name=normalized_vendor_name,
+
+                invoice_number=invoice_number,
+
+                invoice_date=invoice_date,
+
+                total_amount=amount_value,
+
+                currency=currency,
+
+                bill_category=bill_category,
+
+                file_path=save_path,
+
+                extracted_text=extracted_text,
+
+                extraction_confidence=0.95,
+
+                duplicate_risk_score=duplicate_risk_score,
+
+                anomaly_risk_score=0.10,
+
+                ai_recommendation=ai_recommendation,
+
+                ai_reasoning=ai_reasoning,
+
+                approval_status=approval_status,
+
+                workflow_stage=workflow_stage,
+
+                current_approver=current_approver,
+
+                forwarded_to=None,
+
+                rejection_reason=None,
+
+                parent_invoice_id=parent_invoice_id,
+
+                version_number=version_number,
+
+                resubmitted_flag=resubmitted_flag,
+
+                sla_status=sla_status,
+
+                sla_due_date=sla_due_date
+            )
+
+            session.add(invoice)
+
+            session.commit()
+
+            # =================================================
+            # APPROVAL HISTORY
+            # =================================================
+
+            history = ApprovalHistory(
+
+                invoice_id=invoice.id,
+
+                action="Invoice Uploaded",
+
+                from_user=employee.employee_name,
+
+                to_user=current_approver,
+
+                comments="""
+Invoice uploaded into enterprise workflow engine.
+                """
+            )
+
+            session.add(history)
+
+            session.commit()
+
+            # =================================================
+            # AUDIT LOG
+            # =================================================
+
+            add_audit_log(
+
+                invoice_number,
+
+                f"""
+Invoice Saved
+({approval_status})
+                """
+            )
+
+            # =================================================
+            # EMAIL NOTIFICATION
+            # =================================================
+
+            if approval_status != STATUS_APPROVED:
+
+                send_review_email(
+
+                    recipient_email="finance@company.com",
 
                     vendor_name=vendor_name,
 
                     invoice_number=invoice_number,
 
-                    invoice_date=invoice_date,
+                    amount=amount_value,
 
-                    total_amount=cleaned_amount,
-
-                    currency=currency,
-
-                    approval_status=approval_status,
-
-                    file_path=save_path
+                    approval_status=approval_status
                 )
 
-                session.add(invoice)
+            # =================================================
+            # AI SUMMARY EMAIL
+            # =================================================
 
-                session.commit()
+            send_ai_summary_email(
 
-                add_audit_log(
+                recipient_email="finance@company.com",
 
-                    invoice_number,
+                invoice_number=invoice_number,
 
-                    f"Invoice Saved ({approval_status})"
-                )
+                vendor_name=vendor_name,
 
-                # ----------------------------------------
-                # EMAIL
-                # ----------------------------------------
+                amount=amount_value,
 
-                if approval_status == STATUS_MANAGER_APPROVAL:
+                ai_recommendation=ai_recommendation,
 
-                    send_review_email(
+                confidence_score=0.95,
 
-                        vendor_name,
+                duplicate_risk=duplicate_risk_score,
 
-                        invoice_number,
+                anomaly_score=0.10
+            )
 
-                        cleaned_amount,
+            # =================================================
+            # SUCCESS MESSAGE
+            # =================================================
 
-                        approval_status
-                    )
+            st.success(
+                f"""
+Invoice successfully onboarded into
+enterprise workflow orchestration.
+                """
+            )
 
-                st.success(
-                    f"Invoice Saved ({approval_status})"
-                )
+            st.info(
+                f"""
+Current Approver:
+{current_approver}
 
-                st.session_state.uploader_key += 1
+Workflow Stage:
+{workflow_stage}
 
-                st.rerun()
+AI Recommendation:
+{ai_recommendation}
+                """
+            )
+
+            st.session_state.uploader_key += 1
+
+            st.rerun()
