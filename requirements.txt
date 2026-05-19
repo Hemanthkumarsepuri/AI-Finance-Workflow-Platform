@@ -1,20 +1,20 @@
 streamlit>=1.32.0
+
 pandas>=2.0.0
+numpy>=1.26.0
 plotly>=5.18.0
 sqlalchemy>=2.0.0
-numpy>=1.26.0
 
 Pillow>=10.0.0
 opencv-python-headless>=4.8.0
 
-pytesseract>=0.3.10
-pdf2image>=1.16.3
 pdfplumber>=0.10.3
+pdf2image>=1.16.3
+
 easyocr>=1.7.1
 
 python-dotenv>=1.0.0
 openai>=1.30.0
 
-torch
-torchvision
-pymupdf
+torch==2.2.2
+torchvision==0.17.2
