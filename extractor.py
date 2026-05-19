@@ -6,7 +6,12 @@ import easyocr
 import numpy as np
 
 from PIL import Image
+from pdf2image import convert_from_path
 from dotenv import load_dotenv
+
+from utils import (
+    format_invoice_date
+)
 
 # =========================================================
 # LOAD ENVIRONMENT
@@ -36,17 +41,11 @@ try:
 
         OPENAI_AVAILABLE = True
 
-        print(
-            "OpenAI Client Initialized"
-        )
-
 except Exception as e:
 
     print(
-        "OpenAI Initialization Error:"
+        f"OpenAI Initialization Error: {str(e)}"
     )
-
-    print(str(e))
 
 # =========================================================
 # OCR INITIALIZATION
@@ -89,10 +88,45 @@ def extract_text_from_pdf(
     except Exception as e:
 
         print(
-            "PDF Extraction Error:"
+            f"PDF Extraction Error: {str(e)}"
         )
 
-        print(str(e))
+    return text
+
+# =========================================================
+# SCANNED PDF OCR FALLBACK
+# =========================================================
+
+def extract_text_from_scanned_pdf(
+    pdf_path
+):
+
+    text = ""
+
+    try:
+
+        pages = convert_from_path(
+            pdf_path
+        )
+
+        for page in pages:
+
+            image_np = np.array(page)
+
+            results = reader.readtext(
+                image_np,
+                detail=0
+            )
+
+            text += "\n".join(
+                results
+            )
+
+    except Exception as e:
+
+        print(
+            f"Scanned PDF OCR Error: {str(e)}"
+        )
 
     return text
 
@@ -119,27 +153,61 @@ def extract_text_from_image(
             detail=0
         )
 
-        extracted_text = "\n".join(
-            results
-        )
-
-        return extracted_text
+        return "\n".join(results)
 
     except Exception as e:
 
         print(
-            "Image OCR Error:"
+            f"Image OCR Error: {str(e)}"
         )
-
-        print(str(e))
 
         return ""
 
 # =========================================================
-# BASIC FALLBACK EXTRACTION
+# GST VALIDATION
 # =========================================================
 
-def basic_regex_extraction(
+def validate_gst_information(
+    text
+):
+
+    gst_pattern = r"\b\d{2}[A-Z]{5}\d{4}[A-Z]{1}\d[Z]{1}[A-Z\d]{1}\b"
+
+    gst_match = re.search(
+        gst_pattern,
+        text
+    )
+
+    if gst_match:
+
+        return (
+
+            True,
+
+            gst_match.group(0),
+
+            "GST compliant invoice detected."
+        )
+
+    return (
+
+        False,
+
+        "",
+
+        """
+GST number not found.
+Possible reimbursement receipt or
+non-tax invoice.
+Finance review recommended.
+        """
+    )
+
+# =========================================================
+# ENTERPRISE REGEX EXTRACTION
+# =========================================================
+
+def enterprise_regex_extraction(
     text
 ):
 
@@ -153,75 +221,206 @@ def basic_regex_extraction(
 
         "Total Amount": "",
 
-        "Currency": "INR"
+        "Currency": "INR",
+
+        "GST Status": "",
+
+        "GST Number": "",
+
+        "GST Message": "",
+
+        "Extraction Confidence": 0.0
     }
 
-    # -----------------------------------------------------
-    # VENDOR
-    # -----------------------------------------------------
+    # =====================================================
+    # VENDOR DETECTION
+    # =====================================================
 
-    lines = text.split("\n")
+    lines = [
 
-    if lines:
+        line.strip()
 
-        invoice_data[
-            "Vendor Name"
-        ] = lines[0][:50]
+        for line in text.split("\n")
 
-    # -----------------------------------------------------
+        if line.strip()
+    ]
+
+    for line in lines[:10]:
+
+        if len(line) > 3:
+
+            if not any(
+
+                keyword in line.lower()
+
+                for keyword in [
+
+                    "invoice",
+                    "bill",
+                    "gst",
+                    "tax",
+                    "date"
+                ]
+            ):
+
+                invoice_data[
+                    "Vendor Name"
+                ] = line[:80]
+
+                break
+
+    # =====================================================
     # INVOICE NUMBER
-    # -----------------------------------------------------
+    # =====================================================
 
-    invoice_match = re.search(
+    invoice_patterns = [
 
-        r"Invoice[\s#:]*([A-Za-z0-9\-\/]+)",
+        r"Invoice\s*(?:No|Number|#)?[:\s]*([A-Za-z0-9\-\/]+)",
 
-        text,
+        r"Bill\s*(?:No|Number|#)?[:\s]*([A-Za-z0-9\-\/]+)",
 
-        re.IGNORECASE
+        r"Receipt\s*(?:No|Number|#)?[:\s]*([A-Za-z0-9\-\/]+)",
+
+        r"Ref\s*(?:No|Number|#)?[:\s]*([A-Za-z0-9\-\/]+)"
+    ]
+
+    for pattern in invoice_patterns:
+
+        match = re.search(
+
+            pattern,
+
+            text,
+
+            re.IGNORECASE
+        )
+
+        if match:
+
+            invoice_data[
+                "Invoice Number"
+            ] = match.group(1)
+
+            break
+
+    # =====================================================
+    # DATE EXTRACTION
+    # =====================================================
+
+    date_patterns = [
+
+        r"\d{2}[/-]\d{2}[/-]\d{4}",
+
+        r"\d{4}[/-]\d{2}[/-]\d{2}"
+    ]
+
+    for pattern in date_patterns:
+
+        match = re.search(
+            pattern,
+            text
+        )
+
+        if match:
+
+            formatted_date = (
+                format_invoice_date(
+                    match.group(0)
+                )
+            )
+
+            invoice_data[
+                "Invoice Date"
+            ] = formatted_date
+
+            break
+
+    # =====================================================
+    # AMOUNT EXTRACTION
+    # =====================================================
+
+    amount_patterns = [
+
+        r"(?:Grand Total|Total Amount|Amount Payable|Net Amount|Total)[^\d]*([\d,]+\.\d{2})",
+
+        r"₹\s*([\d,]+\.\d{2})"
+    ]
+
+    for pattern in amount_patterns:
+
+        match = re.search(
+
+            pattern,
+
+            text,
+
+            re.IGNORECASE
+        )
+
+        if match:
+
+            invoice_data[
+                "Total Amount"
+            ] = match.group(1)
+
+            break
+
+    # =====================================================
+    # GST VALIDATION
+    # =====================================================
+
+    gst_found, gst_number, gst_message = (
+
+        validate_gst_information(
+            text
+        )
     )
 
-    if invoice_match:
+    invoice_data[
+        "GST Status"
+    ] = (
 
-        invoice_data[
-            "Invoice Number"
-        ] = invoice_match.group(1)
-
-    # -----------------------------------------------------
-    # DATE
-    # -----------------------------------------------------
-
-    date_match = re.search(
-
-        r"(\d{2}[/-]\d{2}[/-]\d{4})",
-
-        text
+        "GST Available"
+        if gst_found
+        else "GST Missing"
     )
 
-    if date_match:
+    invoice_data[
+        "GST Number"
+    ] = gst_number
 
-        invoice_data[
-            "Invoice Date"
-        ] = date_match.group(1)
+    invoice_data[
+        "GST Message"
+    ] = gst_message
 
-    # -----------------------------------------------------
-    # AMOUNT
-    # -----------------------------------------------------
+    # =====================================================
+    # CONFIDENCE SCORING
+    # =====================================================
 
-    amount_match = re.search(
+    confidence = 0
 
-        r"(?:Total|Amount|Payable)[^\d]*([\d,]+\.\d{2})",
+    if invoice_data["Vendor Name"]:
 
-        text,
+        confidence += 0.25
 
-        re.IGNORECASE
+    if invoice_data["Invoice Number"]:
+
+        confidence += 0.25
+
+    if invoice_data["Invoice Date"]:
+
+        confidence += 0.25
+
+    if invoice_data["Total Amount"]:
+
+        confidence += 0.25
+
+    invoice_data[
+        "Extraction Confidence"
+    ] = round(
+        confidence,
+        2
     )
-
-    if amount_match:
-
-        invoice_data[
-            "Total Amount"
-        ] = amount_match.group(1)
 
     return invoice_data
 
@@ -235,15 +434,12 @@ def ai_extract_invoice_data(
 
     if not OPENAI_AVAILABLE:
 
-        print(
-            "OpenAI Not Available"
-        )
-
         return None
 
     try:
 
         response = (
+
             client.chat.completions.create(
 
                 model="gpt-3.5-turbo",
@@ -251,31 +447,45 @@ def ai_extract_invoice_data(
                 messages=[
 
                     {
+
                         "role": "system",
 
                         "content":
                         """
-                        Extract invoice details.
+You are an enterprise invoice extraction engine.
 
-                        Return ONLY valid JSON.
+Extract:
 
-                        JSON format:
+- Vendor Name
+- Invoice Number
+- Invoice Date
+- Total Amount
+- Currency
+- GST Number
+- GST Availability
 
-                        {
-                          "Vendor Name": "",
-                          "Invoice Number": "",
-                          "Invoice Date": "",
-                          "Total Amount": "",
-                          "Currency": ""
-                        }
+Return ONLY valid JSON.
+
+JSON FORMAT:
+
+{
+  "Vendor Name": "",
+  "Invoice Number": "",
+  "Invoice Date": "",
+  "Total Amount": "",
+  "Currency": "INR",
+  "GST Number": "",
+  "GST Status": ""
+}
                         """
                     },
 
                     {
+
                         "role": "user",
 
                         "content":
-                        text[:6000]
+                        text[:12000]
                     }
                 ],
 
@@ -292,10 +502,6 @@ def ai_extract_invoice_data(
             .strip()
         )
 
-        # -------------------------------------------------
-        # CLEAN JSON BLOCKS
-        # -------------------------------------------------
-
         content = content.replace(
             "```json",
             ""
@@ -306,52 +512,39 @@ def ai_extract_invoice_data(
             ""
         )
 
-        content = content.strip()
-
         parsed = json.loads(
             content
         )
 
-        return {
+        parsed[
+            "Invoice Date"
+        ] = format_invoice_date(
 
-            "Vendor Name":
-            parsed.get(
-                "Vendor Name",
-                ""
-            ),
-
-            "Invoice Number":
-            parsed.get(
-                "Invoice Number",
-                ""
-            ),
-
-            "Invoice Date":
             parsed.get(
                 "Invoice Date",
                 ""
-            ),
-
-            "Total Amount":
-            parsed.get(
-                "Total Amount",
-                ""
-            ),
-
-            "Currency":
-            parsed.get(
-                "Currency",
-                "INR"
             )
-        }
+        )
+
+        parsed[
+            "Extraction Confidence"
+        ] = 0.95
+
+        if not parsed.get(
+            "GST Status"
+        ):
+
+            parsed[
+                "GST Status"
+            ] = "Unknown"
+
+        return parsed
 
     except Exception as e:
 
         print(
-            "AI Extraction Error:"
+            f"AI Extraction Error: {str(e)}"
         )
-
-        print(str(e))
 
         return None
 
@@ -364,7 +557,7 @@ def extract_invoice_data(
 ):
 
     print(
-        "Starting Extraction"
+        "Starting Enterprise Extraction"
     )
 
     extension = (
@@ -387,12 +580,15 @@ def extract_invoice_data(
             )
         )
 
-        # OCR fallback for scanned PDFs
+        # OCR fallback for scanned PDF
 
         if not extracted_text.strip():
 
-            print(
-                "PDF text empty"
+            extracted_text = (
+
+                extract_text_from_scanned_pdf(
+                    file_path
+                )
             )
 
     # =====================================================
@@ -413,14 +609,10 @@ def extract_invoice_data(
         )
 
     # =====================================================
-    # VALIDATION
+    # NO TEXT FALLBACK
     # =====================================================
 
     if not extracted_text:
-
-        print(
-            "No text extracted"
-        )
 
         return {
 
@@ -432,12 +624,17 @@ def extract_invoice_data(
 
             "Total Amount": "",
 
-            "Currency": "INR"
-        }
+            "Currency": "INR",
 
-    print(
-        "TEXT EXTRACTION SUCCESS"
-    )
+            "GST Status": "Unknown",
+
+            "GST Number": "",
+
+            "GST Message":
+            "Text extraction failed.",
+
+            "Extraction Confidence": 0.0
+        }
 
     # =====================================================
     # AI EXTRACTION
@@ -449,20 +646,12 @@ def extract_invoice_data(
 
     if ai_result:
 
-        print(
-            "AI EXTRACTION SUCCESS"
-        )
-
         return ai_result
 
     # =====================================================
-    # FALLBACK REGEX
+    # ENTERPRISE REGEX FALLBACK
     # =====================================================
 
-    print(
-        "Using Regex Fallback"
-    )
-
-    return basic_regex_extraction(
+    return enterprise_regex_extraction(
         extracted_text
     )
